@@ -7,6 +7,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -51,7 +52,7 @@ def _rank_colors(F, fronts):
 
 def save_frame(fig, directory: Path, idx: int):
     directory.mkdir(exist_ok=True)
-    fig.savefig(directory / f"frame_{idx:03d}.png", bbox_inches="tight")
+    fig.savefig(directory / f"frame_{idx:03d}.png")
     plt.close(fig)
 
 
@@ -173,6 +174,20 @@ def _evolution_frames(
         every = max(1, n_gen // n_frames)
     gens = list(range(0, n_gen + 1, every))[:n_frames]
 
+    all_F = np.vstack(history["objectives"])
+    all_pts = np.vstack([all_F, true_front])
+    x_min, x_max = all_pts[:, 0].min(), all_pts[:, 0].max()
+    y_min, y_max = all_pts[:, 1].min(), all_pts[:, 1].max()
+    pad_x = (x_max - x_min) * 0.05 or 0.5
+    pad_y = (y_max - y_min) * 0.05 or 0.5
+    xlim = (x_min - pad_x, x_max + pad_x)
+    ylim = (y_min - pad_y, y_max + pad_y)
+
+    max_rank = int(max(
+        max(_rank_colors(history["objectives"][g], history["fronts"][g]).max() for g in gens),
+        4,
+    ))
+
     for frame_idx, gen in enumerate(gens):
         F = history["objectives"][gen]
         fronts = history["fronts"][gen]
@@ -183,18 +198,34 @@ def _evolution_frames(
         ax.plot(true_front[:, 0], true_front[:, 1], lw=2,
                 color="#aaaaaa", label="истинный фронт", zorder=1)
         sc = ax.scatter(F[:, 0], F[:, 1], c=colors, cmap=CMAP,
-                        s=22, alpha=0.75, zorder=3, vmin=0, vmax=max(4, colors.max()))
+                        s=22, alpha=0.75, zorder=3, vmin=0, vmax=max_rank)
         ax.scatter(F[front0, 0], F[front0, 1], s=40, edgecolors="#1f77b4",
                    facecolors="none", lw=1.4, zorder=4, label="ранг 1")
         ax.set_xlabel("$f_1$")
         ax.set_ylabel("$f_2$")
         ax.set_title(f"{title}  (поколение {gen})")
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
         ax.legend(fontsize=8, loc="upper right")
         plt.colorbar(sc, ax=ax, label="ранг", shrink=0.8)
         fig.tight_layout()
         save_frame(fig, frame_dir, frame_idx)
 
     print(f"  {frame_dir.name}: {len(gens)} frames")
+
+
+def _assemble_gif(frame_dir: Path, output: Path, duration: int = 120):
+    frames = sorted(frame_dir.glob("frame_*.png"))
+    imgs = [Image.open(f).convert("P", dither=Image.Dither.NONE) for f in frames]
+    imgs[0].save(
+        output,
+        save_all=True,
+        append_images=imgs[1:],
+        optimize=False,
+        duration=duration,
+        loop=0,
+    )
+    print(f"  {output.name}: {len(imgs)} frames @ {duration} ms/frame")
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +398,16 @@ def main():
     ]
     for name, dirname, tf, label in frame_specs:
         _evolution_frames(histories[name], tf, ASSETS / dirname, label, n_frames=25)
+
+    print("\nAssembling GIFs...")
+    gif_specs = [
+        ("frames_zdt1", "animation_zdt1.gif"),
+        ("frames_zdt2", "animation_zdt2.gif"),
+        ("frames_zdt3", "animation_zdt3.gif"),
+        ("frames_sch",  "animation_sch.gif"),
+    ]
+    for dirname, gifname in gif_specs:
+        _assemble_gif(ASSETS / dirname, ASSETS / gifname)
 
     print("\nGenerating comparison plots...")
     save_convergence_plots(histories, true_fronts)
